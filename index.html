@@ -1079,7 +1079,7 @@
       </select>
     </div>
     <div class="topbar-right">
-      <button class="button-secondary" id="view-code" type="button">View code</button>
+      <button class="button-secondary" id="view-code" type="button" aria-haspopup="dialog" aria-expanded="false">View code</button>
       <span class="live-badge"><span class="live-dot" aria-hidden="true"></span>LIVE real API calls</span>
     </div>
   </header>
@@ -1318,6 +1318,7 @@ Output:</textarea>
       "openai/gpt-oss-safeguard-20b": { reasoning: "optional", reasoningMode: "include", webSearch: true },
       "qwen/qwen3.8-27b": { reasoning: "optional", reasoningMode: "effort", webSearch: false }
     };
+    const DEFAULT_MODEL = "openai/gpt-oss-20b";
     const FALLBACK_MODELS = Object.keys(MODEL_CAPABILITIES).sort((first, second) => first.localeCompare(second));
     const conversationHistory = [];
     let isSubmitting = false;
@@ -1465,7 +1466,11 @@ Output:</textarea>
         modelSelect.append(option);
       }
 
-      modelSelect.value = modelIds.includes(previousModel) ? previousModel : modelIds[0];
+      modelSelect.value = modelIds.includes(previousModel)
+        ? previousModel
+        : modelIds.includes(DEFAULT_MODEL)
+          ? DEFAULT_MODEL
+          : modelIds[0];
       updateCapabilityControls();
     }
 
@@ -1622,19 +1627,48 @@ Output:</textarea>
       })[character]);
     }
 
-    /* WHAT THIS DOES: Copies generated content and exposes clipboard failures on the button. */
+    /* WHAT THIS DOES: Copies generated content with a fallback and reports failures on the button. */
+    function copyWithLegacyClipboard(text) {
+      if (typeof document.execCommand !== "function") return false;
+
+      const previousFocus = document.activeElement;
+      const temporaryInput = document.createElement("textarea");
+      temporaryInput.value = text;
+      temporaryInput.setAttribute("readonly", "");
+      temporaryInput.setAttribute("aria-hidden", "true");
+      temporaryInput.style.position = "fixed";
+      temporaryInput.style.top = "-1000px";
+      temporaryInput.style.opacity = "0";
+      document.body.append(temporaryInput);
+
+      try {
+        temporaryInput.select();
+        return document.execCommand("copy");
+      } finally {
+        temporaryInput.remove();
+        if (previousFocus instanceof HTMLElement && previousFocus.isConnected) {
+          previousFocus.focus();
+        }
+      }
+    }
+
     async function copyTextToClipboard(text, button) {
       try {
-        if (!navigator.clipboard?.writeText) {
+        if (navigator.clipboard?.writeText) {
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch (error) {
+            if (!copyWithLegacyClipboard(text)) throw error;
+          }
+        } else if (!copyWithLegacyClipboard(text)) {
           throw new Error("Clipboard access is unavailable in this browser.");
         }
-        await navigator.clipboard.writeText(text);
         button.textContent = "Copied";
         window.setTimeout(() => {
           if (button.isConnected && button.textContent === "Copied") {
             button.textContent = button.dataset.defaultLabel || "Copy";
           }
-        }, 1300);
+        }, 2500);
       } catch (error) {
         button.textContent = "Copy failed";
         button.title = error instanceof Error ? error.message : String(error);
@@ -2362,11 +2396,17 @@ Output:</textarea>
     });
 
     viewCodeButton.addEventListener("click", () => {
+      if (codeDialog.open) return;
       renderCurrentCode();
       codeDialog.showModal();
+      viewCodeButton.setAttribute("aria-expanded", "true");
+    });
+    codeDialog.addEventListener("close", () => {
+      viewCodeButton.setAttribute("aria-expanded", "false");
     });
     document.querySelector("#close-code-dialog").addEventListener("click", () => {
       codeDialog.close();
+      viewCodeButton.setAttribute("aria-expanded", "false");
     });
     copyCurlButton.addEventListener("click", () => {
       copyTextToClipboard(curlCode.textContent, copyCurlButton);
